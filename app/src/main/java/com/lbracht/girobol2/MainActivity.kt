@@ -11,6 +11,7 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.absoluteOffset
@@ -28,16 +29,22 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.lbracht.girobol2.ui.theme.Girobol2Theme
 import kotlin.math.abs
+import kotlin.math.asin
+import kotlin.math.atan2
+import kotlin.math.sign
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -67,13 +74,23 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         windowManager.defaultDisplay.getMetrics(displayMetrics)
         screenHeight = displayMetrics.heightPixels.toFloat()
         screenWidth = displayMetrics.widthPixels.toFloat()
+        //ballPosition = Offset(screenWidth/2, screenHeight/2)
 
         setContent {
             Girobol2Theme {
-                Surface(
+                Box(
                     modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
+                    contentAlignment = Alignment.Center
                 ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.green_glitter_textured_paper_background__2_),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                    Log.d("MainActivity",
+                        "onCreate: screenWidth, screenHeight: $screenWidth, $screenHeight"
+                    )
                     BallGame(screenWidth, screenHeight)
                 }
             }
@@ -108,34 +125,17 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             ).toFloat()
 
 
-
-            // Update ball position based on gyroscope data
-
+            // Update ball position based on sensor matrix
             val timestamp = event.timestamp
             val dt = if (lastTimestamp != 0L) (timestamp - lastTimestamp) * 1e-9f else 0f
-            lastTimestamp = timestamp
 
-            val angularVelocityX = event.values[1]
-            val angularVelocityY = event.values[0]
-
-            val deltaRotationX = angularVelocityX * dt
-            val deltaRotationY = angularVelocityY * dt
-            val deltaRotationXY = sqrt(deltaRotationX*deltaRotationX + deltaRotationY*deltaRotationY)
-
-            currentOrientationX += deltaRotationX
-            currentOrientationY += deltaRotationY
-
-
-            // TODO: I have to multiply those by a constant
-            var ballAccelerationX = sin(currentOrientationX) // TODO: divide the argument by 2? chatgpt said but I dont agree
-            var ballAccelerationY = sin(currentOrientationY)
-
-            val pitch = Math.asin(rotationMatrix[7].toDouble()).toFloat()
-            val roll = Math.atan2(rotationMatrix[6].toDouble(), rotationMatrix[8].toDouble()).toFloat()
+            val pitch = asin(rotationMatrix[7].toDouble()).toFloat()
+            val roll = atan2(rotationMatrix[6].toDouble(), rotationMatrix[8].toDouble()).toFloat()
             val inclinationXY = sqrt(pitch*pitch + roll*roll)
 
-            ballAccelerationX = -roll
-            ballAccelerationY = pitch
+            // TODO: I create difficulty modes (easy, normal hard), by changing these 2 constants and the friction constant below
+            var ballAccelerationX = -sin(roll) * Const.GRAVITY_FACTOR
+            var ballAccelerationY = sin(pitch) * Const.GRAVITY_FACTOR
 
 
             ballAcceleration = Offset(
@@ -144,7 +144,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             )
 
             // TODO: adjust this constant
-            if(inclinationXY < 0.1 && abs(ballSpeed.x) < 5 && abs(ballSpeed.y) < 5) {
+            if(inclinationXY < Const.INCLINATION_THRESHOLD && abs(ballSpeed.x) < Const.SPEED_THRESHOLD && abs(ballSpeed.y) < Const.SPEED_THRESHOLD) {
             //if(eventXY < 0.0005) {
                 ballAcceleration = Offset(
                     0f, // Adjust based on gyroscope data
@@ -152,15 +152,18 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 )
             }
 
+            // TODO: I create difficulty modes (easy, normal hard), by changing these friction constants below
             ballSpeed = Offset(
-                ballSpeed.x * 0.988f + ballAcceleration.x, // Adjust based on gyroscope data
-                ballSpeed.y * 0.988f + ballAcceleration.y  // Adjust based on gyroscope data
+                ballSpeed.x + ballAcceleration.x * dt - ballSpeed.x.sign * Const.KINETIC_FRICTION * dt, // Adjust based on gyroscope data
+                ballSpeed.y + ballAcceleration.y * dt - ballSpeed.y.sign * Const.KINETIC_FRICTION * dt// Adjust based on gyroscope data
             )
-            println("ballSpeed -> " + ballSpeed)
-            ballPosition = Offset(ballPosition.x + ballSpeed.x, ballPosition.y + ballSpeed.y)
+            println("ballSpeed -> $ballSpeed")
+            ballPosition = Offset(
+                ballPosition.x + ballSpeed.x * dt + ballAcceleration.x * dt * dt / 2,
+                ballPosition.y + ballSpeed.y * dt + ballAcceleration.y * dt * dt / 2
+            )
 
-            val currentOrientationDegreesX = Math.toDegrees(currentOrientationX.toDouble()).toFloat()
-            val currentOrientationDegreesY = Math.toDegrees(currentOrientationY.toDouble()).toFloat()
+            lastTimestamp = timestamp
 
             //Log.d("Sensor Event", "currentOrientation in degrees: x -> $currentOrientationDegreesX")
             //Log.d("Sensor Event", "currentOrientation in degrees: y -> $currentOrientationDegreesY")
@@ -188,10 +191,8 @@ fun BallGame(screenWidth: Float, screenHeight: Float) {
     }
 
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.White)
-            .padding(0.dp)
+        modifier = Modifier.fillMaxSize(),
+        //contentAlignment = Alignment.Center
     ) {
         Ball(ballPosition)
     }
@@ -202,13 +203,13 @@ fun Ball(position: Offset) {
     Canvas(
         modifier = Modifier
             .absoluteOffset(
-                x = with(LocalDensity.current) { position.x.toDp() - 25.dp },
-                y = with(LocalDensity.current) { position.y.toDp() - 25.dp })
-            .size(50.dp)
+                x = with(LocalDensity.current) { position.x.toDp() - Const.BALL_SIZE / 2 },
+                y = with(LocalDensity.current) { position.y.toDp() - Const.BALL_SIZE / 2 })
+            .size(Const.BALL_SIZE)
             .clip(CircleShape)
     ) {
         drawIntoCanvas {
-            drawCircle(color = Color.Blue)
+            drawCircle(color = Color.White)
         }
     }
 }
