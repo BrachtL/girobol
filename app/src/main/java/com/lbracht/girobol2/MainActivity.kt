@@ -5,6 +5,8 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.media.MediaPlayer
+import android.media.SoundPool
 import android.os.Bundle
 import android.util.DisplayMetrics
 import android.util.Log
@@ -12,16 +14,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
@@ -42,7 +41,6 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.lbracht.girobol2.ui.theme.Girobol2Theme
 import kotlinx.coroutines.delay
-import java.util.Random
 import java.util.Timer
 import kotlin.concurrent.schedule
 import kotlin.math.abs
@@ -66,6 +64,9 @@ private var randomY = 0f
 
 class MainActivity : ComponentActivity(), SensorEventListener {
 
+    private lateinit var soundManager: SoundManager
+    private lateinit var musicManager: MusicManager
+
     private lateinit var sensorManager: SensorManager
     private var rotationVectorSensor: Sensor? = null
 
@@ -76,8 +77,17 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        soundManager = SoundManager(this)
+        musicManager = MusicManager(this)
+
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         rotationVectorSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+
+        if (rotationVectorSensor != null) {
+            sensorManager.registerListener(this, rotationVectorSensor, SensorManager.SENSOR_DELAY_GAME)
+        } else {
+            Log.e("MainActivity", "Gyroscope sensor not available on this device.")
+        }
 
         val displayMetrics = DisplayMetrics()
         windowManager.defaultDisplay.getMetrics(displayMetrics)
@@ -127,14 +137,25 @@ class MainActivity : ComponentActivity(), SensorEventListener {
 
     override fun onResume() {
         super.onResume()
+        //soundManager = SoundManager(this)
+        musicManager.playMusic()
+
         rotationVectorSensor?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
         }
+        // TODO: load ball state
+        ballSpeed = Offset(0f, 0f)
+        ballAcceleration = Offset(0f, 0f)
+        ballPosition = Offset(screenWidth/2, screenHeight/2)
     }
 
     override fun onPause() {
         super.onPause()
+        // TODO: save the ball state (position, speed, acceleration, etc)
+
         sensorManager.unregisterListener(this)
+        soundManager.stopAllSounds()
+        musicManager.pauseMusic()
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
@@ -197,7 +218,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 Log.d("MainActivity", "onSensorChanged: goalRemainingTime -> $goalRemainingTime")
                 goalRemainingTime -= dt
 
+                if(!soundManager.isSoundPlaying(Const.GOAL_LOADING_FX)) {
+                    soundManager.playSoundEffect(Const.GOAL_LOADING_FX, true)
+                }
                 Log.d("MainActivity", "onSensorChanged: INSIDE CIRCLE")
+            } else {
+                soundManager.stopSoundEffect(Const.GOAL_LOADING_FX)
             }
 
             lastTimestamp = timestamp
@@ -367,5 +393,140 @@ fun Goal(modifier: Modifier = Modifier) {
                 )
         )
         currentGoal = Offset(randomX, randomY)
+    }
+}
+
+
+class SoundManager(private val context: Context) {
+    private var soundPool: SoundPool? = null
+    //private var soundId: Int? = null
+    // TODO: this 6 is how many sounds I have on Const.kt file
+    private val streamIdList: MutableList<Int?> = MutableList(6) { null }
+    //private var isPlaying: Boolean = false
+
+    private val soundIdList: MutableList<Int?> = MutableList(6) { null }
+
+    private val isPlayingList: MutableList<Boolean> = MutableList(6) { false }
+
+
+    init {
+        loadSounds()
+    }
+
+    private fun loadSounds() {
+        soundPool = SoundPool.Builder().setMaxStreams(5).build()
+
+        // TODO: as I add sounds, change here
+        soundIdList[0] = soundPool?.load(context, R.raw.goal_loading_2, 1)
+        soundIdList[1] = soundPool?.load(context, R.raw.goal_loading_2, 1)
+        soundIdList[2] = soundPool?.load(context, R.raw.goal_loading_2, 1)
+        soundIdList[3] = soundPool?.load(context, R.raw.goal_loading_2, 1)
+        soundIdList[4] = soundPool?.load(context, R.raw.goal_loading_2, 1)
+        soundIdList[5] = soundPool?.load(context, R.raw.goal_loading_2, 1)
+    }
+
+    fun playSoundEffect(sound: Int, loop: Boolean = false) {
+        if (soundPool == null) {
+            loadSounds()
+        }
+
+        streamIdList[sound] = soundPool?.play(soundIdList[sound]!!, 0.4f, 0.4f, 1, if (loop) -1 else 0, 1.0f)
+        isPlayingList[sound] = true
+    }
+
+    fun stopSoundEffect(sound: Int) {
+        streamIdList[sound]?.let {
+            soundPool?.stop(it)
+        }
+        isPlayingList[sound] = false
+    }
+
+    fun stopAllSounds() {
+        for ((index, streamId) in streamIdList.withIndex()) {
+            streamId?.let {
+                soundPool?.stop(it)
+                isPlayingList[index] = false
+            }
+        }
+    }
+
+    fun isSoundPlaying(sound: Int): Boolean {
+        return isPlayingList[sound]
+    }
+}
+
+class MusicManager(private val context: Context) {
+
+    private var mediaPlayer: MediaPlayer? = null
+    private var currentSoundIndex: Int = 0
+    private var pausedPosition: Int = 0
+
+    private val soundIds = intArrayOf(
+        R.raw.music_2,
+        R.raw.music_2,
+        R.raw.music_2,
+        R.raw.music_2,
+        R.raw.music_2,
+        R.raw.music_2
+    )
+
+    init {
+        initMediaPlayer()
+    }
+
+    private fun initMediaPlayer() {
+        mediaPlayer = MediaPlayer.create(context, soundIds[currentSoundIndex])
+        mediaPlayer?.setOnCompletionListener {
+            playNextSound()
+        }
+    }
+
+    private fun playNextSound() {
+        // Move to the next sound index (loop back to the beginning if needed)
+        currentSoundIndex = (currentSoundIndex + 1) % soundIds.size
+
+        // Release the current MediaPlayer
+        mediaPlayer?.release()
+
+        // Create a new MediaPlayer for the next sound
+        mediaPlayer = MediaPlayer.create(context, soundIds[currentSoundIndex])
+
+        // Set the OnCompletionListener again for the new MediaPlayer
+        mediaPlayer?.setOnCompletionListener {
+            // Playback completed, trigger playback of the next sound
+            playNextSound()
+        }
+
+        // Start playback of the next sound
+        mediaPlayer?.start()
+
+        // If paused, resume from the saved position
+        if (pausedPosition > 0) {
+            mediaPlayer?.seekTo(pausedPosition)
+            pausedPosition = 0
+        }
+    }
+
+    fun playMusic() {
+        mediaPlayer?.start()
+    }
+
+    fun pauseMusic() {
+        mediaPlayer?.let {
+            if (it.isPlaying) {
+                it.pause()
+                pausedPosition = it.currentPosition
+            }
+        }
+    }
+
+    fun stopMusic() {
+        mediaPlayer?.stop()
+        mediaPlayer?.release()
+        initMediaPlayer()
+    }
+
+    fun isMusicPlaying(): Boolean {
+        return mediaPlayer?.isPlaying == true
     }
 }

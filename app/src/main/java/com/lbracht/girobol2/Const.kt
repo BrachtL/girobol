@@ -15,4 +15,13 @@ object Const {
 
     const val LEVEL_TIME = 60
     const val GOAL_TIME = 3f
+
+    const val MUSIC_0 = 0
+    const val MUSIC_1 = 1
+    const val MUSIC_2 = 2
+    const val MUSIC_3 = 3
+    const val MUSIC_4 = 4
+    const val MUSIC_5 = 5
+    const val GOAL_LOADING_FX = 0
+
 }
